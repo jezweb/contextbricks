@@ -1,8 +1,0 @@
-{
-  "name": "design-assets",
-  "description": "Generate colour palettes, favicon packages, custom SVG icon sets, AI-generated images (Gemini), and image processing (resize, convert, optimise).",
-  "author": {
-    "name": "Jeremy Dawes / Jezweb",
-    "email": "jeremy@jezweb.net"
-  }
-}

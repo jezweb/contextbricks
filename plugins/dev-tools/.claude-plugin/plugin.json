@@ -1,8 +1,0 @@
-{
-  "name": "dev-tools",
-  "description": "Skill creation, project health (permissions, context, docs audit and setup), dev sessions, GitHub releases, Gemini peer review and API guide, capabilities reference, UX audits, and responsive layout testing.",
-  "author": {
-    "name": "Jeremy Dawes / Jezweb",
-    "email": "jeremy@jezweb.net"
-  }
-}
