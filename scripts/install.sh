@@ -44,6 +44,15 @@ mkdir -p "$HOME/.claude"
 cp "$STATUSLINE_SCRIPT" "$INSTALL_PATH"
 chmod +x "$INSTALL_PATH"
 echo "   Installed: $INSTALL_PATH"
+
+# Copy context awareness hook
+HOOK_SCRIPT="$SCRIPT_DIR/context-hook.sh"
+HOOK_INSTALL_PATH="$HOME/.claude/context-hook.sh"
+if [[ -f "$HOOK_SCRIPT" ]]; then
+    cp "$HOOK_SCRIPT" "$HOOK_INSTALL_PATH"
+    chmod +x "$HOOK_INSTALL_PATH"
+    echo "   Installed: $HOOK_INSTALL_PATH"
+fi
 echo ""
 
 # Update settings.json
@@ -87,5 +96,11 @@ echo "Your 3-line status bar shows:"
 echo "   Line 1: Model, repo:branch, git status, agent name, worktree"
 echo "   Line 2: Latest commit + lines changed"
 echo "   Line 3: Context bricks, percentage, free tokens, duration, cost"
+echo ""
+echo "Context awareness hook installed at ~/.claude/context-hook.sh"
+echo "To enable it, add to your ~/.claude/settings.json:"
+echo '   "hooks": { "UserPromptSubmit": [{ "matcher": "", "hooks": ['
+echo '     { "type": "command", "command": "bash ~/.claude/context-hook.sh" }'
+echo '   ]}]}'
 echo ""
 echo "Restart Claude Code to see your new status line!"

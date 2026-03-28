@@ -1,13 +1,15 @@
 #!/usr/bin/env node
 
 // Claude Code Custom Status Line — Context Bricks
-// v4.0.0 - Cross-platform Node.js version (no jq/bash dependencies)
+// v4.1.0 - Rate limits, git caching, context awareness hook
 //
 // Line 1: [Model:style] repo:branch status | @agent | wt
 // Line 2: [commit] message | +lines/-lines
-// Line 3: [■■■■□□□□] 73%! | 52k free | 2h15m | $12.50
+// Line 3: [■■■■□□□□] 73%! | 52k free | 2h15m | $12.50 | 5h:23% 7d:41%
 
 const { execFileSync } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 // Read JSON from stdin
 const chunks = [];
@@ -44,7 +46,22 @@ const c = {
   cyanDim: '\x1b[0;36m',
 };
 
-// Safe git command execution using execFileSync (no shell injection risk)
+// ── Git caching (5-second stale pattern from Claude Code docs) ──
+
+const GIT_CACHE_FILE = '/tmp/contextbricks-git-cache.json';
+const GIT_CACHE_MAX_AGE = 5; // seconds
+
+function gitCacheIsStale() {
+  try {
+    if (!fs.existsSync(GIT_CACHE_FILE)) return true;
+    const age = (Date.now() / 1000) - fs.statSync(GIT_CACHE_FILE).mtimeMs / 1000;
+    return age > GIT_CACHE_MAX_AGE;
+  } catch {
+    return true;
+  }
+}
+
+// Safe git command execution
 function git(...args) {
   try {
     return execFileSync('git', args, { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] }).trim();
@@ -53,15 +70,65 @@ function git(...args) {
   }
 }
 
+function getGitInfo(currentDir) {
+  // Check cache first
+  if (!gitCacheIsStale()) {
+    try {
+      const cached = JSON.parse(fs.readFileSync(GIT_CACHE_FILE, 'utf8'));
+      // Only use cache if same directory
+      if (cached.dir === currentDir) return cached;
+    } catch { /* cache corrupt, refresh */ }
+  }
+
+  // Fresh git data
+  const isGit = git('rev-parse', '--git-dir') !== '';
+  const info = { dir: currentDir, isGit, repoName: '', branch: '', commitShort: '', commitMsg: '', gitStatus: '', inWorktree: false };
+
+  if (!isGit) {
+    try { fs.writeFileSync(GIT_CACHE_FILE, JSON.stringify(info)); } catch {}
+    return info;
+  }
+
+  const toplevel = git('rev-parse', '--show-toplevel');
+  info.repoName = toplevel ? toplevel.split('/').pop().split('\\').pop() : '';
+  info.branch = git('branch', '--show-current') || 'detached';
+  info.commitShort = git('rev-parse', '--short', 'HEAD');
+  info.commitMsg = git('log', '-1', '--pretty=%s').slice(0, 50);
+
+  // Worktree detection
+  const gitDir = git('rev-parse', '--git-dir');
+  info.inWorktree = gitDir.includes('/worktrees/') || gitDir.includes('\\worktrees\\');
+
+  // Status
+  const porcelain = git('status', '--porcelain');
+  if (porcelain) info.gitStatus = '*';
+
+  // Ahead/behind
+  const upstream = git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}');
+  if (upstream) {
+    const ahead = parseInt(git('rev-list', '--count', `${upstream}..HEAD`)) || 0;
+    const behind = parseInt(git('rev-list', '--count', `HEAD..${upstream}`)) || 0;
+    if (ahead > 0) info.gitStatus += `\u2191${ahead}`;
+    if (behind > 0) info.gitStatus += `\u2193${behind}`;
+  }
+
+  // Cache it
+  try { fs.writeFileSync(GIT_CACHE_FILE, JSON.stringify(info)); } catch {}
+
+  return info;
+}
+
 function main(data) {
   // Parse Claude data
   const model = (data.model?.display_name || 'Claude').replace('Claude ', '');
+  // Prefer project_dir (launch dir) over cwd (which can change)
+  const projectDir = data.workspace?.project_dir || data.workspace?.current_dir || process.env.PWD || process.cwd();
   const currentDir = data.workspace?.current_dir || process.env.PWD || process.cwd();
   const linesAdded = data.cost?.total_lines_added || 0;
   const linesRemoved = data.cost?.total_lines_removed || 0;
   const agentName = data.agent?.name || '';
   const outputStyle = data.output_style?.name || '';
-  const exceeds200k = data.context_window?.exceeds_200k_tokens || false;
+  const exceeds200k = data.exceeds_200k_tokens || false;
 
   // Style abbreviation
   let styleAbbrev = '';
@@ -70,37 +137,11 @@ function main(data) {
     styleAbbrev = map[outputStyle] || outputStyle.slice(0, 4);
   }
 
-  // Change to workspace directory
+  // Change to workspace directory for git commands
   try { process.chdir(currentDir); } catch { /* stay where we are */ }
 
-  // Git info
-  const isGit = git('rev-parse', '--git-dir') !== '';
-  let repoName = '', branch = '', commitShort = '', commitMsg = '', gitStatus = '', inWorktree = false;
-
-  if (isGit) {
-    const toplevel = git('rev-parse', '--show-toplevel');
-    repoName = toplevel ? toplevel.split('/').pop().split('\\').pop() : '';
-    branch = git('branch', '--show-current') || 'detached';
-    commitShort = git('rev-parse', '--short', 'HEAD');
-    commitMsg = git('log', '-1', '--pretty=%s').slice(0, 50);
-
-    // Worktree detection
-    const gitDir = git('rev-parse', '--git-dir');
-    inWorktree = gitDir.includes('/worktrees/') || gitDir.includes('\\worktrees\\');
-
-    // Status
-    const porcelain = git('status', '--porcelain');
-    if (porcelain) gitStatus = '*';
-
-    // Ahead/behind
-    const upstream = git('rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}');
-    if (upstream) {
-      const ahead = parseInt(git('rev-list', '--count', `${upstream}..HEAD`)) || 0;
-      const behind = parseInt(git('rev-list', '--count', `HEAD..${upstream}`)) || 0;
-      if (ahead > 0) gitStatus += `\u2191${ahead}`;
-      if (behind > 0) gitStatus += `\u2193${behind}`;
-    }
-  }
+  // Git info (cached)
+  const gi = getGitInfo(currentDir);
 
   // ── Line 1: Session identity ──────────────────────────────
   let line1 = '';
@@ -108,20 +149,20 @@ function main(data) {
     ? `${c.cyan}[${model}:${styleAbbrev}]${c.reset}`
     : `${c.cyan}[${model}]${c.reset}`;
 
-  if (repoName) {
-    line1 += ` ${c.green}${repoName}${c.reset}`;
-    if (branch) line1 += `:${c.blue}${branch}${c.reset}`;
+  if (gi.repoName) {
+    line1 += ` ${c.green}${gi.repoName}${c.reset}`;
+    if (gi.branch) line1 += `:${c.blue}${gi.branch}${c.reset}`;
   }
 
-  if (gitStatus) line1 += ` ${c.red}${gitStatus}${c.reset}`;
+  if (gi.gitStatus) line1 += ` ${c.red}${gi.gitStatus}${c.reset}`;
   if (agentName) line1 += ` | ${c.magenta}@${agentName}${c.reset}`;
-  if (inWorktree) line1 += ` | ${c.yellow}wt${c.reset}`;
+  if (gi.inWorktree) line1 += ` | ${c.yellow}wt${c.reset}`;
 
   // ── Line 2: Git state ─────────────────────────────────────
   let line2 = '';
-  if (commitShort) {
-    line2 += `${c.dim}[${c.reset}${c.yellowDim}${commitShort}${c.reset}${c.dim}]${c.reset}`;
-    if (commitMsg) line2 += ` ${commitMsg}`;
+  if (gi.commitShort) {
+    line2 += `${c.dim}[${c.reset}${c.yellowDim}${gi.commitShort}${c.reset}${c.dim}]${c.reset}`;
+    if (gi.commitMsg) line2 += ` ${gi.commitMsg}`;
   }
 
   if (linesAdded > 0 || linesRemoved > 0) {
@@ -179,6 +220,35 @@ function main(data) {
   if (costUsd > 0) {
     line3 += ` | ${c.yellowDim}$${costUsd.toFixed(2)}${c.reset}`;
   }
+
+  // Rate limits (Pro/Max subscribers)
+  const rl5h = data.rate_limits?.five_hour?.used_percentage;
+  const rl7d = data.rate_limits?.seven_day?.used_percentage;
+  if (rl5h != null || rl7d != null) {
+    let rlParts = [];
+    if (rl5h != null) {
+      const rlColor = rl5h >= 80 ? c.red : rl5h >= 50 ? c.yellowDim : c.dim;
+      rlParts.push(`${rlColor}5h:${Math.round(rl5h)}%${c.reset}`);
+    }
+    if (rl7d != null) {
+      const rlColor = rl7d >= 80 ? c.red : rl7d >= 50 ? c.yellowDim : c.dim;
+      rlParts.push(`${rlColor}7d:${Math.round(rl7d)}%${c.reset}`);
+    }
+    line3 += ` | ${rlParts.join(' ')}`;
+  }
+
+  // Persist context level for hooks (rounded to nearest 100k)
+  try {
+    const contextFile = path.join(process.env.HOME || '', '.claude', 'context-level.json');
+    const free100k = Math.floor(freeTokens / 100000) * 100;  // e.g. 700 for 760k
+    fs.writeFileSync(contextFile, JSON.stringify({
+      freeK: freeK,
+      free100k: free100k,
+      usagePct: usagePct,
+      totalK: Math.floor(totalTokens / 1000),
+      ts: Date.now()
+    }));
+  } catch { /* non-critical — don't break the statusline */ }
 
   // Output
   console.log(line1);
