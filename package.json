@@ -18,7 +18,7 @@
     "contextbricks": "bin/cli.js"
   },
   "scripts": {
-    "postinstall": "echo '\n🧱 ContextBricks installed! Run: contextbricks init\n'"
+    "postinstall": "echo '\n\ud83e\uddf1 ContextBricks installed! Run: contextbricks init\n'"
   },
   "files": [
     "bin/",
@@ -31,13 +31,12 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/jezweb/claude-skills.git",
-    "directory": "tools/statusline-npm"
+    "url": "git+https://github.com/jezweb/contextbricks.git"
   },
   "bugs": {
-    "url": "https://github.com/jezweb/claude-skills/issues"
+    "url": "https://github.com/jezweb/contextbricks/issues"
   },
   "author": "Jeremy Dawes <jeremy@jezweb.net> (https://jezweb.com.au)",
   "license": "MIT",
-  "homepage": "https://github.com/jezweb/claude-skills/tree/main/tools/statusline-npm"
+  "homepage": "https://github.com/jezweb/contextbricks#readme"
 }
